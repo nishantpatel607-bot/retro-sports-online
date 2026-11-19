@@ -1251,7 +1251,7 @@ else if (NET.connected && now - NET.lastPeerSeen > 30000) netConnLost('left');
 } else {
 const h = o.find(p => p.presence.role === 'host');
 if (h) { const hp = h.presence; NET.lastPeerSeen = now; if (!NET.connected) { NET.connected = true; netBurst(); playSound('whistle'); NET.joining = false; NET.err = ''; NET.oppNick = nClean(hp.nick) || 'HOST'; netRender(); }
-if (m && m.guest) { if (hp.s && hp.s.q > m.snapQ) { m.snapQ = hp.s.q; m.snap = hp.s; } if (hp.fin && hp.fin.n === m.id) m.endSc = hp.fin.sc; }
+if (m && m.guest) { if (hp.s && hp.s.q > m.snapQ) { m.snapQ = hp.s.q; m.snapPrev = m.snap; m.snap = hp.s; m.snapAt = performance.now(); } if (hp.fin && hp.fin.n === m.id) m.endSc = hp.fin.sc; }
 else if (!m && hp.run && hp.run.n !== NET.lastRun) { NET.lastRun = hp.run.n; netStartMatch('guest', hp.run.g === 'volleyball' ? 'volleyball' : 'tennis', hp.run.n); }
 } else if (NET.connected && now - NET.lastPeerSeen > 30000) netConnLost('left');
 }
@@ -1289,7 +1289,7 @@ if (NET.code && NET.rm) netPres({});
 NET.avail = netFirebaseReady(); NET.lobby = NET.avail ? true : null;
 NET.lastHeartbeat = 0;
 function netSchedulePoll() {
-const delay = NET.match ? 300 : 800;
+const delay = NET.match ? 120 : 800;
 setTimeout(async () => {
 await netPollNow();
 if (Date.now() - NET.lastHeartbeat >= 2000) { NET.lastHeartbeat = Date.now(); netHeartbeat(); }
@@ -1352,7 +1352,7 @@ if (!n.seen) { if (Date.now() - n.t0 > 25000) { netAbort('OPPONENT DID NOT START
 netWait(''); const mask = n.inMask | 0; NBITS.forEach((b, i) => { KEYS[nrk(b)] = !!((mask >> i) & 1); }); return true;
 }
 function netHostOut(M) {
-const n = M.net; if (!NET.rm || n.ended) return; const now = Date.now(); if (now - (n.lastRestSend || 0) < 200) return; n.lastRestSend = now; n.tick++;
+const n = M.net; if (!NET.rm || n.ended) return; const now = Date.now(); if (now - (n.lastRestSend || 0) < 100) return; n.lastRestSend = now; n.tick++;
 const q = ++n.seq; n.sq.push([q, n.cap.splice(0)]); if (n.sq.length > 6) n.sq.shift();
 const s = { q, m: netPack(M), sc: M.sc.slice(), P: M.P.slice(0, 2).map(netPack), b: netPack(M.b), po: M.pops.slice(0, 4).map(netPack), fx: M.fx.slice(0, 4).map(netPack), sn: n.sq.filter(e => e[1].length) };
 if (M.pt) s.pt = M.pt.slice(); const pr = M.P[1].pred; if (pr) s.pr = [Math.round(pr.x), Math.round(pr.y)];
@@ -1364,7 +1364,21 @@ const n = M.net; if (!netLive(n, 'HOST DISCONNECTED')) return;
 const mask = netMask(M); if (mask !== n.lastMask) { n.lastMask = mask; netPres({ i: mask }); }
 if (n.endSc) { netFinish(M, { sc: n.endSc }); return; }
 const s = n.snap; if (!s) { netWait('CONNECTING TO HOST...'); return; } netWait('');
-netMerge(M, s.m); M.sc = s.sc; if (s.pt) M.pt = s.pt; s.P.forEach((p, i) => netMerge(M.P[i], p)); netMerge(M.b, s.b);
+const prev = n.snapPrev, alpha = prev ? Math.max(0, Math.min(1, (performance.now() - (n.snapAt || 0)) / 120)) : 1;
+const mix = (a, b) => {
+if (!prev || typeof a !== 'number' || typeof b !== 'number') return b;
+return a + (b - a) * alpha;
+};
+const apply = (dst, from, to) => {
+if (!to) return;
+for (const k in to) {
+const v = to[k], pv = from && from[k];
+dst[k] = (typeof v === 'number' && typeof pv === 'number') ? mix(pv, v) : v;
+}
+};
+apply(M, prev && prev.m, s.m); M.sc = s.sc; if (s.pt) M.pt = s.pt;
+s.P.forEach((p, i) => apply(M.P[i], prev && prev.P && prev.P[i], p));
+apply(M.b, prev && prev.b, s.b);
 if (M.tennis) { M.P[1].pred = s.pr ? { x: s.pr[0], y: s.pr[1] } : null; M.P[0].pred = null; M.trail.push([M.b.x, M.b.y, M.b.z]); if (M.trail.length > 8) M.trail.shift(); }
 M.pops = s.po || []; M.fx = s.fx || []; if (n.lastSnd === undefined) n.lastSnd = s.q; (s.sn || []).forEach(e => { if (e[0] > n.lastSnd) { e[1].forEach(t => _psOrig(t)); n.lastSnd = e[0]; } });
 }

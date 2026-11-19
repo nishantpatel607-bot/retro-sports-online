@@ -1376,7 +1376,7 @@ function netWake(on) { try { if (on) { if ('wakeLock' in navigator && !NET.wl) n
 function netFullscreen() { const d = document, e = d.documentElement; try { if (d.fullscreenElement || d.webkitFullscreenElement) { (d.exitFullscreen || d.webkitExitFullscreen).call(d); } else { (e.requestFullscreen || e.webkitRequestFullscreen || (() => {})).call(e); } } catch (x) {} }
 function netLeaveClick() { netLeaveRoom(); }
 /* ---------- real-time sync: host simulates, guest sends input + draws snapshots ---------- */
-function netMask(M) { const C = TCTL.cpu, V = VKEYS.cpu, k = M.tennis ? { L: C.L, R: C.R, U: C.U, D: C.D, aL: C.aL, aR: C.aR, aU: C.aU, aD: C.aD, pw: C.pw } : { L: V.L, R: V.R, J: V.J, Lob: V.Lob, S: V.S }; let v = 0; NBITS.forEach((b, i) => { if (k[b] && k[b].some(c => KEYS[c])) v |= 1 << i; }); return v; }
+function netMask(M) { const C = TCTL.cpu, V = VKEYS.cpu, k = M.tennis ? { L: C.L, R: C.R, U: C.U, D: C.D, aL: C.aL, aR: C.aR, aU: C.aU, aD: C.aD, pw: C.pw } : { L: V.L, R: V.R, J: V.J, Lob: ['KeyR', 'ArrowDown'], S: V.S }; let v = 0; NBITS.forEach((b, i) => { if (k[b] && k[b].some(c => KEYS[c])) v |= 1 << i; }); return v; }
 function netPack(o) { const r = {}; for (const k in o) { const v = o[k], t = typeof v; if (t === 'number') { if (isFinite(v)) r[k] = Math.round(v * 100) / 100; } else if (t === 'boolean' || (t === 'string' && v.length < 40)) r[k] = v; } return r; }
 const NPK = { x: 1, y: 1, z: 1 };
 function netMerge(o, s) { for (const k in s) { const v = s[k]; if (NPK[k] && typeof v === 'number' && typeof o[k] === 'number' && Math.abs(v - o[k]) < 140) o[k] += (v - o[k]) * .5; else o[k] = v; } }
@@ -1387,7 +1387,7 @@ if (!n.seen) { if (Date.now() - n.t0 > 25000) { netAbort('OPPONENT DID NOT START
 netWait(''); const mask = n.inMask | 0; NBITS.forEach((b, i) => { KEYS[nrk(b)] = !!((mask >> i) & 1); }); return true;
 }
 function netHostOut(M) {
-const n = M.net; if (!NET.rm || n.ended) return; const now = Date.now(); if (now - (n.lastRestSend || 0) < 100) return; n.lastRestSend = now; n.tick++;
+const n = M.net; if (!NET.rm || n.ended) return; const now = Date.now(); if (now - (n.lastRestSend || 0) < 50) return; n.lastRestSend = now; n.tick++;
 const q = ++n.seq; n.sq.push([q, n.cap.splice(0)]); if (n.sq.length > 6) n.sq.shift();
 const s = { q, m: netPack(M), sc: M.sc.slice(), P: M.P.slice(0, 2).map(netPack), b: netPack(M.b), po: M.pops.slice(0, 4).map(netPack), fx: M.fx.slice(0, 4).map(netPack), sn: n.sq.filter(e => e[1].length) };
 if (M.pt) s.pt = M.pt.slice(); const pr = M.P[1].pred; if (pr) s.pr = [Math.round(pr.x), Math.round(pr.y)];
@@ -1399,7 +1399,7 @@ const n = M.net; if (!netLive(n, 'HOST DISCONNECTED')) return;
 const mask = netMask(M); if (mask !== n.lastMask) { n.lastMask = mask; netPres({ i: mask }); }
 if (n.endSc) { netFinish(M, { sc: n.endSc }); return; }
 const s = n.snap; if (!s) { netWait('CONNECTING TO HOST...'); return; } netWait('');
-const prev = n.snapPrev, alpha = prev ? Math.max(0, Math.min(1, (performance.now() - (n.snapAt || 0)) / 120)) : 1;
+const prev = n.snapPrev, alpha = prev ? Math.max(0, Math.min(1, (performance.now() - (n.snapAt || 0)) / 60)) : 1;
 const mix = (a, b) => {
 if (!prev || typeof a !== 'number' || typeof b !== 'number') return b;
 return a + (b - a) * alpha;

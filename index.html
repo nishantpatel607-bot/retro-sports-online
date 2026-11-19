@@ -1209,7 +1209,7 @@ function fbPlayerPath(id = NET.playerId) { return fbRoomPath() + '/players/' + e
 const netNeed = () => { if (netFirebaseReady()) { NET.avail = true; NET.lobby = true; return true; } NET.avail = false; NET.err = NEEDLINK; netRender(); return false; };
 function netPres(p) { if (!NET.code || !NET.playerId || !netFirebaseReady()) return; fbFetch(fbPlayerPath(), { method: 'PATCH', body: JSON.stringify({ ...p, lastSeen: Date.now(), nick: NET.nick, role: NET.role, active: true }) }).catch(() => {}); }
 function netLeaveRm() { if (NET.code && netFirebaseReady()) fbFetch(fbPlayerPath(), { method: 'PATCH', body: JSON.stringify({ active: false, lastSeen: Date.now() }) }).catch(() => {}); }
-function netCleanup() { netLeaveRm(); NET.rm = null; NET.connected = false; NET.joining = false; NET.listening = false; NET.role = null; NET.oppNick = ''; NET.err = ''; NET.note = ''; NET.code = ''; NET.lastRun = null; NET.lastRoomData = null; }
+function netCleanup() { netStopGuestStream(); netLeaveRm(); NET.rm = null; NET.connected = false; NET.joining = false; NET.listening = false; NET.role = null; NET.oppNick = ''; NET.err = ''; NET.note = ''; NET.code = ''; NET.lastRun = null; NET.lastRoomData = null; }
 function netFail(msg) { NET.err = msg; NET.joining = false; if (NET.role === 'guest') { netLeaveRm(); NET.rm = null; NET.connected = false; NET.screen = 'join'; } netRender(); }
 async function netCreate() {
 if (!netNeed()) return; netUnlockAudio(); const nick = NET.nick; netCleanup(); NET.nick = nick; NET.role = 'host'; NET.screen = 'host'; netRender();
@@ -1240,6 +1240,41 @@ NET.joining = false; netPollNow(); netRender();
 } catch (e) { NET.err = 'COULD NOT JOIN ROOM. CHECK THE CODE AND FIREBASE DATABASE RULES.'; NET.joining = false; netRender(); }
 }
 function netRejoin() { NET.joinVal = NET.code || NET.joinVal; NET.result = null; netJoin(); }
+/* Firebase Realtime Database streaming: receive host snapshots as soon as they change,
+   instead of downloading the whole room repeatedly on the guest device. */
+NET.guestStream = null; NET.guestStreamPeer = '';
+function netStopGuestStream() {
+if (NET.guestStream) { try { NET.guestStream.close(); } catch (e) {} }
+NET.guestStream = null; NET.guestStreamPeer = '';
+}
+function netGuestSnapshot(m, snap) {
+if (!m || !m.guest || !snap || typeof snap.q !== 'number' || snap.q <= m.snapQ) return;
+m.snapQ = snap.q; m.snapPrev = m.snap; m.snap = snap; m.snapAt = performance.now();
+}
+function netGuestStream(peer) {
+if (typeof EventSource === 'undefined' || !peer || !NET.code) return;
+if (NET.guestStream && NET.guestStreamPeer === peer) return;
+netStopGuestStream();
+const url = fbUrl(fbRoomPath() + '/players/' + encodeURIComponent(peer) + '.json');
+try {
+const es = new EventSource(url); NET.guestStream = es; NET.guestStreamPeer = peer;
+const receive = ev => {
+try {
+const msg = JSON.parse(ev.data), m = NET.match;
+if (!msg || !m || !m.guest) return;
+const path = String(msg.path || '/');
+if ((path === '/' || path === '') && msg.data) {
+if (msg.data.s) netGuestSnapshot(m, msg.data.s);
+if (msg.data.fin && msg.data.fin.n === m.id) m.endSc = msg.data.fin.sc;
+} else if (path === '/s') netGuestSnapshot(m, msg.data);
+else if (path === '/fin' && msg.data && msg.data.n === m.id) m.endSc = msg.data.sc;
+} catch (e) { /* ignore malformed stream events */ }
+};
+es.addEventListener('put', receive); es.addEventListener('patch', receive);
+es.addEventListener('cancel', () => netStopGuestStream());
+es.addEventListener('auth_revoked', () => netStopGuestStream());
+} catch (e) { netStopGuestStream(); }
+}
 function netPeers(ch) {
 const players = ch && ch.players ? ch.players : {}, now = Date.now();
 const active = Object.entries(players).filter(([id,p]) => p && p.active !== false && now - (p.lastSeen || 0) < 30000);
@@ -1250,10 +1285,10 @@ if (g) { NET.lastPeerSeen = now; if (!NET.connected) { NET.connected = true; net
 else if (NET.connected && now - NET.lastPeerSeen > 30000) netConnLost('left');
 } else {
 const h = o.find(p => p.presence.role === 'host');
-if (h) { const hp = h.presence; NET.lastPeerSeen = now; if (!NET.connected) { NET.connected = true; netBurst(); playSound('whistle'); NET.joining = false; NET.err = ''; NET.oppNick = nClean(hp.nick) || 'HOST'; netRender(); }
-if (m && m.guest) { if (hp.s && hp.s.q > m.snapQ) { m.snapQ = hp.s.q; m.snapPrev = m.snap; m.snap = hp.s; m.snapAt = performance.now(); } if (hp.fin && hp.fin.n === m.id) m.endSc = hp.fin.sc; }
+if (h) { const hp = h.presence; NET.lastPeerSeen = now; netGuestStream(h.peer); if (!NET.connected) { NET.connected = true; netBurst(); playSound('whistle'); NET.joining = false; NET.err = ''; NET.oppNick = nClean(hp.nick) || 'HOST'; netRender(); }
+if (m && m.guest) { if (hp.s) netGuestSnapshot(m, hp.s); if (hp.fin && hp.fin.n === m.id) m.endSc = hp.fin.sc; }
 else if (!m && hp.run && hp.run.n !== NET.lastRun) { NET.lastRun = hp.run.n; netStartMatch('guest', hp.run.g === 'volleyball' ? 'volleyball' : 'tennis', hp.run.n); }
-} else if (NET.connected && now - NET.lastPeerSeen > 30000) netConnLost('left');
+} else { netStopGuestStream(); if (NET.connected && now - NET.lastPeerSeen > 30000) netConnLost('left'); }
 }
 }
 function netLive(n, msg) { if (NET.connected) { n.dc = 0; return true; } if (!n.dc) n.dc = Date.now(); return Date.now() - n.dc < 30000; }
@@ -1289,7 +1324,7 @@ if (NET.code && NET.rm) netPres({});
 NET.avail = netFirebaseReady(); NET.lobby = NET.avail ? true : null;
 NET.lastHeartbeat = 0;
 function netSchedulePoll() {
-const delay = NET.match ? 120 : 800;
+const delay = NET.match ? (NET.match.role === 'host' ? 120 : 1000) : 800;
 setTimeout(async () => {
 await netPollNow();
 if (Date.now() - NET.lastHeartbeat >= 2000) { NET.lastHeartbeat = Date.now(); netHeartbeat(); }

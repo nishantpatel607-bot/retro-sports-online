@@ -966,11 +966,32 @@ const g = c.createRadialGradient(bp.x - r * .3, bp.y - r * .3, 1, bp.x, bp.y, r)
 c.strokeStyle = 'rgba(255,255,255,.9)'; c.lineWidth = Math.max(1, r * .22); c.beginPath(); c.arc(bp.x - r * .9, bp.y, r * .95, -.9, .9); c.stroke(); c.beginPath(); c.arc(bp.x + r * .9, bp.y, r * .95, Math.PI - .9, Math.PI + .9); c.stroke();
 }
 /* ===== BASEBALL (RETRO SLUGGERS): pitch close-up + overhead field ===== */
+function netDiagCreate() {
+netDiagRemove();
+const d = document.createElement('div'); d.id = 'net-match-diag';
+d.style.cssText = 'position:fixed;z-index:100004;top:8px;left:8px;max-width:min(330px,78vw);padding:7px 9px;background:rgba(0,0,0,.78);border:1px solid rgba(255,255,255,.35);border-radius:5px;color:#dbeafe;font:9px/1.7 monospace;white-space:pre-wrap;pointer-events:none;text-shadow:none;';
+d.textContent = 'MULTIPLAYER DIAGNOSTICS\nCollecting measurements...'; document.body.appendChild(d);
+}
+function netDiagRemove() { const d = document.getElementById('net-match-diag'); if (d) d.remove(); }
+function netDiagUpdate(ts, drawMs) {
+const n = NET.match; if (!n || !n.diag) return; const d = n.diag;
+d.frames++; d.draw += drawMs || 0; d.draws++;
+if (ts - d.last >= 1000) {
+const elapsed = ts - d.last; d.fps = Math.round(d.frames * 1000 / elapsed); d.sim = Math.round(d.steps * 1000 / elapsed); d.drawMs = d.draws ? (d.draw / d.draws).toFixed(1) : '0';
+d.sentRate = (d.sent * 1000 / elapsed).toFixed(1); d.recvRate = (d.recv * 1000 / elapsed).toFixed(1);
+d.frames = d.steps = d.sent = d.recv = d.draw = d.draws = 0; d.last = ts;
+const age = d.lastRxAt ? Math.round(ts - d.lastRxAt) : null;
+const stream = n.guest ? (NET.guestStream ? ['CONNECTING','OPEN','CLOSED'][NET.guestStream.readyState] || 'UNKNOWN' : 'OFF') : 'HOST';
+const input = d.inputAge == null ? 'n/a' : Math.round(d.inputAge) + ' ms*';
+const panel = document.getElementById('net-match-diag');
+if (panel) panel.textContent = 'DIAGNOSTICS · ' + n.role.toUpperCase() + '\nFPS: ' + d.fps + '  | SIM: ' + d.sim + '/s\nDRAW TIME: ' + d.drawMs + ' ms avg\nSNAPSHOTS: ' + (n.guest ? d.recvRate + ' received/s' : d.sentRate + ' sent/s') + '\nSNAPSHOT AGE: ' + (age == null ? 'waiting' : age + ' ms') + (n.guest ? '\nAVG SNAPSHOT GAP: ' + (d.gap ? Math.round(d.gap) + ' ms' : 'n/a') + '\nSTREAM: ' + stream : '\nGUEST INPUT AGE: ' + input) + '\n*Clock-based estimate; not exact one-way latency';
+}
+}
 function matchLoop(ts) {
 if (!MM) return;
 acc += Math.min(100, ts - (lastTs || ts)); lastTs = ts;
-while (acc > 16.67 && MM) { if (MM.tennis) tennisMatchStep(); else if (MM.volleyball) volleyballMatchStep(); acc -= 16.67; }
-if (MM) { if (MM.tennis) drawTennisMatch(); else if (MM.volleyball) drawVolleyballMatch(); matchLoopId = requestAnimationFrame(matchLoop); }
+while (acc > 16.67 && MM) { if (MM.net && MM.net.diag) MM.net.diag.steps++; if (MM.tennis) tennisMatchStep(); else if (MM.volleyball) volleyballMatchStep(); acc -= 16.67; }
+if (MM) { const drawStart = performance.now(); if (MM.tennis) drawTennisMatch(); else if (MM.volleyball) drawVolleyballMatch(); if (MM.net) netDiagUpdate(ts, performance.now() - drawStart); matchLoopId = requestAnimationFrame(matchLoop); }
 }
 function finishMatch() {} function camPt(m, x, y) { return [x, y]; } function renderHubMenu() {} function renderPreMatchScreen() {} function renderSettingsMenu() {}
 function scoreFxKind(c, m, ce, p, n, col, hx, hy) {
@@ -1249,7 +1270,7 @@ NET.guestStream = null; NET.guestStreamPeer = '';
 }
 function netGuestSnapshot(m, snap) {
 if (!m || !m.guest || !snap || typeof snap.q !== 'number' || snap.q <= m.snapQ) return;
-m.snapQ = snap.q; m.snapPrev = m.snap; m.snap = snap; m.snapAt = performance.now();
+const rxNow = performance.now(), d = m.diag; if (d) { d.recv++; if (d.lastRxAt) { const gap = rxNow - d.lastRxAt; d.gap = d.gap ? d.gap * .7 + gap * .3 : gap; } d.lastRxAt = rxNow; } m.snapQ = snap.q; m.snapPrev = m.snap; m.snap = snap; m.snapAt = rxNow;
 }
 function netGuestStream(peer) {
 if (typeof EventSource === 'undefined' || !peer || !NET.code) return;
@@ -1281,7 +1302,7 @@ const active = Object.entries(players).filter(([id,p]) => p && p.active !== fals
 const o = active.filter(([id]) => id !== NET.playerId).map(([id,presence]) => ({ peer:id, presence })), m = NET.match;
 if (NET.role === 'host') {
 const g = o.find(p => p.presence.role === 'guest');
-if (g) { NET.lastPeerSeen = now; if (!NET.connected) { NET.connected = true; netBurst(); playSound('whistle'); NET.oppNick = nClean(g.presence.nick) || 'PLAYER 2'; netRender(); } if (m && m.role === 'host') { if (g.presence.rdy === m.id) m.seen = true; m.inMask = g.presence.i | 0; } }
+if (g) { NET.lastPeerSeen = now; if (!NET.connected) { NET.connected = true; netBurst(); playSound('whistle'); NET.oppNick = nClean(g.presence.nick) || 'PLAYER 2'; netRender(); } if (m && m.role === 'host') { if (g.presence.rdy === m.id) m.seen = true; m.inMask = g.presence.i | 0; if (m.diag && g.presence.it) m.diag.inputAge = Math.max(0, now - g.presence.it); } }
 else if (NET.connected && now - NET.lastPeerSeen > 30000) netConnLost('left');
 } else {
 const h = o.find(p => p.presence.role === 'host');
@@ -1338,10 +1359,10 @@ if (NET.role !== 'host' || !NET.connected || NET.match) return; netUnlockAudio()
 const g = NET.game === 'volleyball' ? 'volleyball' : 'tennis', id = Date.now(); netPres({ run: { n: id, g }, fin: null, s: null }); netStartMatch('host', g, id);
 }
 function netStartMatch(role, g, id) {
-const gs = GameState, m = NET.match = { role, id, guest: role === 'guest', g, dc: 0, seq: 0, cap: [], sq: [], seen: false, ended: false, lastMask: -1, inMask: 0, inSeq: -1, lastIn: Date.now(), snap: null, snapQ: -1, t0: Date.now(), tick: 0, lastSend: 0, inSendSeq: 0, endSc: null };
+const gs = GameState, m = NET.match = { role, id, guest: role === 'guest', g, dc: 0, seq: 0, cap: [], sq: [], seen: false, ended: false, lastMask: -1, inMask: 0, inSeq: -1, lastIn: Date.now(), snap: null, snapQ: -1, t0: Date.now(), tick: 0, lastSend: 0, inSendSeq: 0, endSc: null, diag: { frames: 0, steps: 0, last: performance.now(), fps: 0, sim: 0, draw: 0, draws: 0, sent: 0, recv: 0, sentRate: 0, recvRate: 0, lastRxAt: 0, gap: 0, lastGapAt: 0, inputAge: null } };
 const names = role === 'host' ? netNames(NET.nick, NET.oppNick) : netNames(NET.oppNick, NET.nick);
 const intro = document.getElementById('intro-screen'); if (intro && getComputedStyle(intro).display !== 'none') { try { cancelAnimationFrame(introAnimId); } catch (e) {} intro.style.display = 'none'; document.getElementById('schedule-banner').style.display = 'flex'; }
-NET.screen = null; NET.result = null; netRender(); document.body.classList.add('net-play'); netTouchBuild(g); netWake(true); netCountdown();
+NET.screen = null; NET.result = null; netRender(); document.body.classList.add('net-play'); netDiagCreate(); netTouchBuild(g); netWake(true); netCountdown();
 const sv = [gs.sport, gs.tnPlayers, gs.tnTeam, gs.vbPlayers, gs.vbTeam]; gs.sport = g;
 if (g === 'tennis') { gs.tnPlayers = 2; gs.tnTeam = 1; startTennisMatch(); } else { gs.vbPlayers = 2; gs.vbTeam = 1; startVolleyballMatch(); }
 [gs.sport, gs.tnPlayers, gs.tnTeam, gs.vbPlayers, gs.vbTeam] = sv;
@@ -1353,7 +1374,7 @@ if (m.guest) { M.me = M.P[1]; netPres({ rdy: id, i: 0 }); } netPill();
 const netKeysOff = () => NBITS.forEach(b => { KEYS[nrk(b)] = false; });
 function netEndMatchLocal() {
 const n = NET.match; if (n) n.ended = true; if (n && n.role === 'host') netPres({ run: null, s: null }); if (n && n.guest) netPres({ rdy: null, i: 0 }); netKeysOff(); netTouchReset(); cancelAnimationFrame(matchLoopId); MM = null; TV = TV0;
-document.getElementById('canvas-container').style.display = 'none'; document.body.classList.remove('net-play'); netWake(false); NET.match = null;
+document.getElementById('canvas-container').style.display = 'none'; document.body.classList.remove('net-play'); netDiagRemove(); netWake(false); NET.match = null;
 }
 function netAbort(reason) {
 if (!NET.match) return; netEndMatchLocal(); NET.result = { title: 'ONLINE MATCH', big: reason, small: '' }; NET.screen = 'result'; netRender();
@@ -1392,11 +1413,11 @@ const q = ++n.seq; n.sq.push([q, n.cap.splice(0)]); if (n.sq.length > 6) n.sq.sh
 const s = { q, m: netPack(M), sc: M.sc.slice(), P: M.P.slice(0, 2).map(netPack), b: netPack(M.b), po: M.pops.slice(0, 4).map(netPack), fx: M.fx.slice(0, 4).map(netPack), sn: n.sq.filter(e => e[1].length) };
 if (M.pt) s.pt = M.pt.slice(); const pr = M.P[1].pred; if (pr) s.pr = [Math.round(pr.x), Math.round(pr.y)];
 let len = JSON.stringify(s).length; if (len > 3500) { s.po = []; s.fx = []; len = JSON.stringify(s).length; } if (len > 3500) s.sn = [];
-netPres({ s });
+if (n.diag) n.diag.sent++; netPres({ s });
 }
 function netGuestStep(M) {
 const n = M.net; if (!netLive(n, 'HOST DISCONNECTED')) return;
-const mask = netMask(M); if (mask !== n.lastMask) { n.lastMask = mask; netPres({ i: mask }); }
+const mask = netMask(M); if (mask !== n.lastMask) { n.lastMask = mask; n.lastInputAt = Date.now(); netPres({ i: mask, it: n.lastInputAt }); }
 if (n.endSc) { netFinish(M, { sc: n.endSc }); return; }
 const s = n.snap; if (!s) { netWait('CONNECTING TO HOST...'); return; } netWait('');
 const prev = n.snapPrev, alpha = prev ? Math.max(0, Math.min(1, (performance.now() - (n.snapAt || 0)) / 60)) : 1;
